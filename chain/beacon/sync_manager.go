@@ -187,7 +187,11 @@ func (s *SyncManager) CheckPastBeacons(ctx context.Context, upTo uint64, cb func
 
 	var faultyBeacons []uint64
 	// notice that we do not validate the genesis round 0
-	for i := uint64(1); i < uint64(s.store.Len()); i++ {
+	ln, err := s.store.Len()
+	if err != nil {
+		return nil, fmt.Errorf("unable to fetch the store.len %w", err)
+	}
+	for i := uint64(1); i < uint64(ln); i++ {
 		select {
 		case <-ctx.Done():
 			logger.Debugw("Context done, returning")
@@ -473,38 +477,52 @@ func SyncChain(l log.Logger, store CallbackStore, req SyncRequest, stream SyncSt
 		return fmt.Errorf("%w %d < %d", ErrNoBeaconStored, last.Round, fromRound)
 	}
 
-	done := make(chan error, 1)
-	send := func(b *chain.Beacon) bool {
+	send := func(b *chain.Beacon) error {
 		packet := beaconToProto(b)
 		packet.Metadata = &common.Metadata{BeaconID: beaconID}
 		if err := stream.Send(packet); err != nil {
 			logger.Debugw("", "syncer", "streaming_send", "err", err)
-			done <- err
-			return false
+			return err
 		}
-		return true
+		return nil
 	}
 
 	// we know that last.Round >= fromRound from the above if
 	if fromRound != 0 {
-		// first sync up from the store itself
-		shouldContinue := true
-		store.Cursor(func(c chain.Cursor) {
-			for bb := c.Seek(fromRound); bb != nil; bb = c.Next() {
-				if !send(bb) {
+		err := store.Cursor(func(c chain.Cursor) error {
+			select {
+			case <-stream.Context().Done():
+				return stream.Context().Err()
+			default:
+			}
+			bb, err := c.Seek(fromRound)
+			if err != nil {
+				return err
+			}
+			for ; bb != nil; bb, err = c.Next() {
+				select {
+				case <-stream.Context().Done():
+					return stream.Context().Err()
+				default:
+				}
+				if err != nil {
+					return err
+				}
+				if err := send(bb); err != nil {
 					logger.Debugw("Error while sending beacon", "syncer", "cursor_seek")
-					shouldContinue = false
-					return
+					return err
 				}
 			}
+
+			return nil
 		})
-		if !shouldContinue {
-			return <-done
+		if err != nil {
+			return err
 		}
 	}
 	// then register a callback to process new incoming beacons
 	store.AddCallback(id, func(b *chain.Beacon) {
-		if !send(b) {
+		if err := send(b); err != nil {
 			logger.Debugw("Error while sending beacon", "syncer", "callback")
 			store.RemoveCallback(id)
 		}
@@ -512,12 +530,7 @@ func SyncChain(l log.Logger, store CallbackStore, req SyncRequest, stream SyncSt
 	defer store.RemoveCallback(id)
 	// either wait that the request cancels out or wait there's an error sending
 	// to the stream
-	select {
-	case <-stream.Context().Done():
-		return stream.Context().Err()
-	case err := <-done:
-		return err
-	}
+	return nil
 }
 
 // Versions prior to 1.4 did not support multibeacon and thus did not have attached metadata.

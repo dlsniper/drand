@@ -888,7 +888,11 @@ func (bp *BeaconProcess) Status(c context.Context, in *drand.StatusRequest) (*dr
 		if err == nil && lastBeacon != nil {
 			chainStore.IsEmpty = false
 			chainStore.LastRound = lastBeacon.GetRound()
-			chainStore.Length = uint64(bp.beacon.Store().Len())
+			blen, err := bp.beacon.Store().Len()
+			if err != nil {
+				return nil, err
+			}
+			chainStore.Length = uint64(blen)
 		}
 	}
 

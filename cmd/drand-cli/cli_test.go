@@ -27,6 +27,7 @@ import (
 	"github.com/drand/drand/core"
 	"github.com/drand/drand/fs"
 	"github.com/drand/drand/key"
+	"github.com/drand/drand/log"
 	"github.com/drand/drand/test"
 	"github.com/drand/kyber"
 	"github.com/drand/kyber/share"
@@ -86,6 +87,7 @@ func TestDeleteBeaconError(t *testing.T) {
 
 func TestDeleteBeacon(t *testing.T) {
 	beaconID := test.GetBeaconIDFromEnv()
+	l := log.NewLogger(nil, log.LogDebug)
 
 	tmp := path.Join(os.TempDir(), "drand")
 	defer os.RemoveAll(tmp)
@@ -93,7 +95,7 @@ func TestDeleteBeacon(t *testing.T) {
 	opt := core.WithConfigFolder(tmp)
 	conf := core.NewConfig(opt)
 	fs.CreateSecureFolder(conf.DBFolder(beaconID))
-	store, err := boltdb.NewBoltStore(conf.DBFolder(beaconID), conf.BoltOptions())
+	store, err := boltdb.NewBoltStore(l, conf.DBFolder(beaconID), conf.BoltOptions())
 	require.NoError(t, err)
 	store.Put(&chain.Beacon{
 		Round:     1,
@@ -119,13 +121,14 @@ func TestDeleteBeacon(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, b)
 
-	store.Close()
+	err = store.Close()
+	require.NoError(t, err)
 
 	args := []string{"drand", "util", "del-beacon", "--folder", tmp, "--id", beaconID, "3"}
 	app := CLI()
 	require.NoError(t, app.Run(args))
 
-	store, err = boltdb.NewBoltStore(conf.DBFolder(beaconID), conf.BoltOptions())
+	store, err = boltdb.NewBoltStore(l, conf.DBFolder(beaconID), conf.BoltOptions())
 	require.NoError(t, err)
 
 	// try to fetch round 3 and 4 - it should now fail
